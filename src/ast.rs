@@ -20,28 +20,28 @@ mod kw {
 }
 
 /// <prgm> ::= <blck>
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Prgm {
     pub defns: Many<Defn>,
     pub main: Blck,
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Defn {
     def: kw::def,
-    name: Ident,
-    params: Paren<Punctuated<Ident, Token!(,)>>,
+    pub name: Ident,
+    pub params: Paren<Punctuated<Ident, Token!(,)>>,
     colon: Token!(:),
-    nest: Nest,
+    pub rule: Nest,
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Nest {
-    block: Brace<Blck>,
+    pub block: Brace<Blck>,
 }
 
 /// <blck> ::= <stmt> EOLN <stmt> OLN
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Blck {
     pub stmts: Many<Stmt>,
 }
@@ -49,7 +49,7 @@ pub struct Blck {
 // <stmt> ::= <name> = <expn>
 //          | pass
 //          | print ( <expn> )
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Stmt {
     Assgn {
         ident: Ident,
@@ -64,19 +64,18 @@ pub enum Stmt {
         end: Token!(;),
     },
     Pass(kw::pass, Token!(;)),
-    Print(kw::print, Paren<Expn>, Token!(;)),
+    Print(kw::print, Paren<Punctuated<Expn, Token!(,)>>, Token!(;)),
     If {
         if_: Token!(if),
         expn: Expn,
-        colon1: Token!(:),
-
+        if_colon: Token!(:),
         #[parsel(recursive)]
-        nest1: Box<Nest>,
+        if_nest: Box<Nest>,
+
         else_: Token!(else),
-        colon2: Token!(:),
-
+        else_colon: Token!(:),
         #[parsel(recursive)]
-        nest2: Box<Nest>,
+        else_nest: Box<Nest>,
     },
     While {
         while_: Token!(while),
@@ -101,15 +100,16 @@ pub enum Stmt {
     },
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Updt {
     Plus(Token!(+=)),
     Minus(Token!(-=)),
 }
 
 // <expn> ::= <addn>
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Expn {
+    UnOp(UnExp<Not>),
     BinOp(
         LeftBinExp<
             Add,
@@ -119,7 +119,6 @@ pub enum Expn {
             >,
         >,
     ),
-    UnOp(UnExp<Not>),
     Inpt(kw::input, #[parsel(recursive)] Paren<Box<Expn>>),
     Int(kw::int, #[parsel(recursive)] Paren<Box<Expn>>),
     Str(kw::str, #[parsel(recursive)] Paren<Box<Expn>>),
@@ -129,47 +128,45 @@ pub enum Expn {
     },
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct LeftBinExp<B: Binop, C> {
     children: LeftAssoc<B, C>,
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct RightBinExp<B: Binop, C> {
     children: RightAssoc<B, C>,
 }
 
 trait Binop {}
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 enum Add {
     Plus(Token!(+)),
     Minus(Token!(-)),
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 enum Mult {
     Times(Token!(*)),
     Div(Token!(/)),
     Mod(Token!(%)),
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
-struct Expt ( 
-    Token!(^)
- );
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
+struct Expt(Token!(^));
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 enum Comp {
     Lt(Token!(<)),
     Leq(Token!(<=)),
     Eq(Token!(==)),
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct And(kw::and);
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct Or(kw::or);
 
 impl Binop for Add {}
@@ -184,7 +181,7 @@ impl Binop for And {}
 
 impl Binop for Or {}
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct UnExp<U: Unop> {
     op: U,
     #[parsel(recursive)]
@@ -193,7 +190,7 @@ struct UnExp<U: Unop> {
 
 trait Unop {}
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct Not(kw::not);
 
 impl Unop for Not {}

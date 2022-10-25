@@ -4,36 +4,68 @@ use parsel::{ast::LeftAssoc, syn::Ident, Spanned};
 
 use crate::ast::*;
 
-type SlpyObject = i128;
+#[derive(Clone)]
+enum SlpyValue {
+    Unit,
+    Int(i128),
+    Str(String),
+    Bool(bool),
+    Fn { params: Vec<Ident>, rule: Nest },
+}
 
 #[derive(Default)]
-pub struct Context(HashMap<Ident, SlpyObject>);
+pub struct Context(HashMap<Ident, SlpyValue>);
 
 impl Context {
-    fn get(&self, name: &Ident) -> Option<SlpyObject> {
-        self.0.get(name).copied()
+    fn get(&self, name: &Ident) -> Option<SlpyValue> {
+        self.0.get(name).cloned()
     }
 
-    fn set(&mut self, name: Ident, val: i128) {
+    fn set(&mut self, name: Ident, val: SlpyValue) {
         self.0.insert(name, val);
     }
 }
 
-pub trait Ast: Sized + Spanned {
+pub trait Eval: Sized + Spanned {
     type Output;
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str>;
 }
 
-impl Ast for Prgm {
+impl Eval for Prgm {
     type Output = ();
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+        for def in self.defns {
+            def.eval(ctx)?
+        }
         self.main.eval(ctx)
     }
 }
 
-impl Ast for Blck {
+impl Eval for Defn {
+    type Output = ();
+
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+        let name = self.name;
+        let params = self.params.into_iter().collect();
+        let rule = self.rule;
+        let func = SlpyValue::Fn { params, rule };
+
+        ctx.set(name, func);
+        Ok(())
+    }
+}
+
+impl Eval for Nest {
+    type Output = ();
+
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+        self.block.eval(ctx)
+    }
+}
+
+impl Eval for Blck {
     type Output = ();
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
@@ -45,7 +77,7 @@ impl Ast for Blck {
     }
 }
 
-impl Ast for Stmt {
+impl Eval for Stmt {
     type Output = ();
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
@@ -64,16 +96,16 @@ impl Ast for Stmt {
     }
 }
 
-impl Ast for Expn {
-    type Output = SlpyObject;
+impl Eval for Expn {
+    type Output = SlpyValue;
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
         self.addn.eval(ctx)
     }
 }
 
-impl Ast for Addn {
-    type Output = SlpyObject;
+impl Eval for Addn {
+    type Output = SlpyValue;
 
     fn eval(mut self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
         match self.mults {
@@ -91,8 +123,8 @@ impl Ast for Addn {
     }
 }
 
-impl Ast for Mult {
-    type Output = SlpyObject;
+impl Eval for Mult {
+    type Output = SlpyValue;
 
     fn eval(mut self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
         match self.leafs {
@@ -110,13 +142,13 @@ impl Ast for Mult {
     }
 }
 
-impl Ast for Leaf {
-    type Output = SlpyObject;
+impl Eval for Leaf {
+    type Output = SlpyValue;
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
         match self {
             Self::Name(name) => ctx.get(&name).ok_or("undefined name"),
-            Self::Nmbr(nmbr) => Ok(nmbr.into_inner() as SlpyObject),
+            Self::Nmbr(nmbr) => Ok(nmbr.into_inner() as SlpyValue),
             Self::Expn(expn) => expn.into_inner().eval(ctx),
             Self::Inpt(_, s) => {
                 print!("{}", s.into_inner().value());
