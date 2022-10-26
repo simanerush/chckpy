@@ -111,7 +111,7 @@ pub enum Updt {
 // <expn> ::= <addn>
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Expn {
-    UnOp(UnExp<Not>),
+    UnOp(Not, #[parsel(recursive)] Box<Expn>),
     BinOp(
         LeftAssoc<
             Add,

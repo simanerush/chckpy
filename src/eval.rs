@@ -195,11 +195,48 @@ impl Eval for Expn {
 
     fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
-            Expn::UnOp(u) => todo!(),
-            Expn::BinOp(_) => todo!(),
-            Expn::Inpt(_, _) => todo!(),
-            Expn::Int(_, _) => todo!(),
-            Expn::Str(_, _) => todo!(),
+            Expn::UnOp(u, expr) => {
+                u.eval(expr.eval(ctx))
+            },
+            Expn::BinOp(expr) => { 
+                expr.eval(ctx)
+            },
+            Expn::Inpt(_, expr) => {
+                let res = expr.into_inner().eval(ctx)?;
+                print!("{res}");
+                std::io::stdout().flush().expect("can flush stdout");
+                let mut buffer = String::new();
+                if std::io::stdin().read_line(&mut buffer).is_ok() {
+                    buffer.trim_end().into()
+                } else {
+                    Err("could not read stdin")
+                }
+            },
+            Expn::Int(_, expr) => {
+                let res = expr.into_inner().eval(ctx)?;
+                Ok(match res {
+                    Value::Int(n)  => {
+                        n
+                    },
+                    Value::Str(s) => {
+                        if let Ok(n) = s.parse() {
+                            n
+                        } else {
+                            return Err("couldn't convert to int")
+                        }
+                    },
+                    Value::Bool(b) => {
+                        if b { 1 }
+                        else { 0 }
+                    }
+                    _ => {
+                        return Err("couldn't convert to int")
+                    }
+                }.into())
+            },
+            Expn::Str(_, expr) => {
+                Ok(expr.into_inner().eval(ctx)?.to_string().into());
+            },
             Expn::FuncCall { name, args } => todo!(),
         }
     }
