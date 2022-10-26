@@ -4,8 +4,11 @@ use parsel::{ast::LeftAssoc, syn::Ident, Spanned};
 
 use crate::ast::*;
 
+pub type Error = &'static str;
+
 #[derive(Clone)]
-enum SlpyValue {
+#[must_use]
+pub enum Value {
     Unit,
     Int(i128),
     Str(String),
@@ -13,29 +16,87 @@ enum SlpyValue {
     Fn { params: Vec<Ident>, rule: Nest },
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Unit => write!(f, "None"),
+            Value::Int(n) => write!(f, "{n}"),
+            Value::Str(s) => write!(f, "{s}"),
+            Value::Bool(b) => write!(f, "{b}"),
+            Value::Fn { rule, .. } => write!(f, "function object"),
+        }
+    }
+}
+
+impl From<i128> for Value {
+    fn from(n: i128) -> Self {
+        Self::Int(n)
+    }
+}
+
+impl From<String> for Value {
+    fn from(s: String) -> Self {
+        Self::Str(s)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(b: bool) -> Self {
+        Self::Bool(b)
+    }
+}
+
+impl From<()> for Value {
+    fn from(_: ()) -> Self {
+        Self::Unit
+    }
+}
+
+impl Value {
+    pub fn expect_int(self) -> Result<i128, Error> {
+        if let Self::Int(n) = self {
+            Ok(n)
+        } else {
+            Err("type error: expected int")
+        }
+    }
+
+    pub fn expect_bool(self) -> Result<bool, Error> {
+        if let Self::Bool(b) = self {
+            Ok(b)
+        } else {
+            Err("type error: expected bool")
+        }
+    }
+}
+
 #[derive(Default)]
-pub struct Context(HashMap<Ident, SlpyValue>);
+pub struct Context(HashMap<Ident, Value>);
 
 impl Context {
-    fn get(&self, name: &Ident) -> Option<SlpyValue> {
+    fn get(&self, name: &Ident) -> Option<Value> {
         self.0.get(name).cloned()
     }
 
-    fn set(&mut self, name: Ident, val: SlpyValue) {
-        self.0.insert(name, val);
+    fn get_or(&self, name: &Ident) -> Result<Value, Error> {
+        self.get(name).ok_or("undefined variable")
+    }
+
+    fn set(&mut self, name: Ident, val: impl Into<Value>) {
+        self.0.insert(name, val.into());
     }
 }
 
 pub trait Eval: Sized + Spanned {
     type Output;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str>;
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error>;
 }
 
 impl Eval for Prgm {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         for def in self.defns {
             def.eval(ctx)?
         }
@@ -46,11 +107,11 @@ impl Eval for Prgm {
 impl Eval for Defn {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         let name = self.name;
         let params = self.params.into_iter().collect();
         let rule = self.rule;
-        let func = SlpyValue::Fn { params, rule };
+        let func = Value::Fn { params, rule };
 
         ctx.set(name, func);
         Ok(())
@@ -60,7 +121,7 @@ impl Eval for Defn {
 impl Eval for Nest {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         self.block.eval(ctx)
     }
 }
@@ -68,7 +129,7 @@ impl Eval for Nest {
 impl Eval for Blck {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         for stmt in self.stmts {
             stmt.eval(ctx)?;
         }
@@ -78,77 +139,95 @@ impl Eval for Blck {
 }
 
 impl Eval for Stmt {
-    type Output = ();
+    /// If None, this is a return; otherwse, it's not a return.
+    type Output = Option<Value>;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    #[must_use]
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
-            Self::Print(_, expn) => {
-                println!("{}", expn.into_inner().eval(ctx)?);
-                Ok(())
-            }
-            Self::Pass(_) => Ok(()),
             Self::Assgn { ident, expn, .. } => {
                 let value = expn.eval(ctx)?;
                 ctx.set(ident, value);
-                Ok(())
             }
+            Self::Updt {
+                ident, op, expn, ..
+            } => {
+                let old = ctx.get_or(&ident)?;
+                let rhs = expn.eval(ctx)?;
+                match op {
+                    Updt::Plus(_) => ctx.set(ident, old.expect_int()? + rhs.expect_int()?),
+                    Updt::Minus(_) => ctx.set(ident, old.expect_int()? - rhs.expect_int()?),
+                };
+            }
+            Self::Pass(_, _) => {}
+            Self::Print(_, args, _) => {
+                for expn in args.into_iter() {
+                    println!("{}", expn.eval(ctx)?);
+                }
+            }
+            Self::If {
+                cond,
+                if_nest,
+                else_nest,
+                ..
+            } => {
+                if cond.eval(ctx)?.expect_bool()? {
+                    if_nest.eval(ctx);
+                } else {
+                    else_nest.eval(ctx);
+                }
+            }
+            Self::While { cond, nest, .. } => {
+                while cond.eval(ctx)?.expect_bool()? {
+                    nest.eval(ctx);
+                }
+            }
+            Self::ReturnExpn { expn, .. } => return Ok(Some(expn.eval(ctx)?)),
+            Self::Return { .. } => return Ok(Some(Value::Unit)),
+            Self::FuncCall { ident, args } => todo!(),
         }
+        Ok(None)
     }
 }
 
 impl Eval for Expn {
-    type Output = SlpyValue;
+    type Output = Value;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
-        self.addn.eval(ctx)
-    }
-}
-
-impl Eval for Addn {
-    type Output = SlpyValue;
-
-    fn eval(mut self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
-        match self.mults {
-            LeftAssoc::Binary { lhs, op, rhs } => {
-                self.mults = *lhs;
-                let left = self.eval(ctx)?;
-                let right = rhs.eval(ctx)?;
-                Ok(match op {
-                    Pm::Addn(_) => left + right,
-                    Pm::Subt(_) => left - right,
-                })
-            }
-            LeftAssoc::Rhs(leaf) => leaf.eval(ctx),
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        match self {
+            Expn::UnOp(u) => todo!(),
+            Expn::BinOp(_) => todo!(),
+            Expn::Inpt(_, _) => todo!(),
+            Expn::Int(_, _) => todo!(),
+            Expn::Str(_, _) => todo!(),
+            Expn::FuncCall { name, args } => todo!(),
         }
     }
 }
 
-impl Eval for Mult {
-    type Output = SlpyValue;
+impl<B: Binop, C: Eval<Output = Value>> Eval for LeftAssoc<B, C>
+where
+    Self: Spanned,
+{
+    type Output = Value;
 
-    fn eval(mut self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
-        match self.leafs {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        match self {
             LeftAssoc::Binary { lhs, op, rhs } => {
-                self.leafs = *lhs;
-                let left = self.eval(ctx)?;
-                let right = rhs.eval(ctx)?;
-                Ok(match op {
-                    Md::Mult(_) => left * right,
-                    Md::Divn(_) => left / right,
-                })
+                let lhs = lhs.eval(ctx);
             }
-            LeftAssoc::Rhs(leaf) => leaf.eval(ctx),
+            LeftAssoc::Rhs(_) => todo!(),
         }
     }
 }
 
 impl Eval for Leaf {
-    type Output = SlpyValue;
+    type Output = Value;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, &'static str> {
+    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
             Self::Name(name) => ctx.get(&name).ok_or("undefined name"),
-            Self::Nmbr(nmbr) => Ok(nmbr.into_inner() as SlpyValue),
+            Self::Nmbr(nmbr) => Ok(nmbr.into_inner() as Value),
             Self::Expn(expn) => expn.into_inner().eval(ctx),
             Self::Inpt(_, s) => {
                 print!("{}", s.into_inner().value());

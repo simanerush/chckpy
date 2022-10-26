@@ -1,9 +1,11 @@
+use crate::eval::{Error, Value};
+
 use parsel::{
     ast::{
         Brace, Ident, LeftAssoc, LitBool, LitInt, LitStr, Many, Paren, Punctuated, RightAssoc,
         Token,
     },
-    custom_punctuation, FromStr, Parse, ToTokens,
+    FromStr, Parse, ToTokens,
 };
 
 mod kw {
@@ -59,7 +61,7 @@ pub enum Stmt {
     },
     Updt {
         ident: Ident,
-        equals: Updt,
+        op: Updt,
         expn: Expn,
         end: Token!(;),
     },
@@ -67,7 +69,7 @@ pub enum Stmt {
     Print(kw::print, Paren<Punctuated<Expn, Token!(,)>>, Token!(;)),
     If {
         if_: Token!(if),
-        expn: Expn,
+        cond: Expn,
         if_colon: Token!(:),
         #[parsel(recursive)]
         if_nest: Box<Nest>,
@@ -79,7 +81,7 @@ pub enum Stmt {
     },
     While {
         while_: Token!(while),
-        expn: Expn,
+        cond: Expn,
         colon: Token!(:),
 
         #[parsel(recursive)]
@@ -111,12 +113,9 @@ pub enum Updt {
 pub enum Expn {
     UnOp(UnExp<Not>),
     BinOp(
-        LeftBinExp<
+        LeftAssoc<
             Add,
-            LeftBinExp<
-                Mult,
-                RightBinExp<Expt, LeftBinExp<Comp, LeftBinExp<And, LeftBinExp<Or, Leaf>>>>,
-            >,
+            LeftAssoc<Mult, RightAssoc<Expt, LeftAssoc<Comp, LeftAssoc<And, LeftAssoc<Or, Leaf>>>>>,
         >,
     ),
     Inpt(kw::input, #[parsel(recursive)] Paren<Box<Expn>>),
@@ -128,17 +127,9 @@ pub enum Expn {
     },
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct LeftBinExp<B: Binop, C> {
-    children: LeftAssoc<B, C>,
+pub trait Binop {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error>;
 }
-
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct RightBinExp<B: Binop, C> {
-    children: RightAssoc<B, C>,
-}
-
-trait Binop {}
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 enum Add {
@@ -169,17 +160,81 @@ struct And(kw::and);
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct Or(kw::or);
 
-impl Binop for Add {}
+impl Binop for Add {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_int()?;
+        let right = rhs.expect_int()?;
+        Ok(match self {
+            Self::Plus(_) => left + right,
+            Self::Minus(_) => left - right,
+        }
+        .into())
+    }
+}
 
-impl Binop for Mult {}
+impl Binop for Mult {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_int()?;
+        let right = rhs.expect_int()?;
+        Ok(match self {
+            Self::Times(_) => left * right,
+            Self::Div(_) => {
+                if right == 0 {
+                    return Err("cannot divide by zero");
+                }
+                left / right
+            }
+            Self::Div(_) => {
+                if right == 0 {
+                    return Err("cannot mod by zero");
+                }
+                left % right
+            }
+        }
+        .into())
+    }
+}
 
-impl Binop for Expt {}
+impl Binop for Expt {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_int()?;
+        let right = rhs.expect_int()?;
+        if let Ok(exp) = right.try_into() {
+            Ok(left.pow(exp).into())
+        } else {
+            Err("negative powers are not supported since there are no floats in dwislpy")
+        }
+    }
+}
 
-impl Binop for Comp {}
+impl Binop for Comp {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_int()?;
+        let right = rhs.expect_int()?;
+        Ok(match self {
+            Comp::Lt(_) => left < right,
+            Comp::Leq(_) => left <= right,
+            Comp::Eq(_) => left == right,
+        }
+        .into())
+    }
+}
 
-impl Binop for And {}
+impl Binop for And {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_bool()?;
+        let right = rhs.expect_bool()?;
+        Ok((left && right).into())
+    }
+}
 
-impl Binop for Or {}
+impl Binop for Or {
+    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+        let left = lhs.expect_bool()?;
+        let right = rhs.expect_bool()?;
+        Ok((left || right).into())
+    }
+}
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct UnExp<U: Unop> {
@@ -188,18 +243,25 @@ struct UnExp<U: Unop> {
     expn: Box<Expn>,
 }
 
-trait Unop {}
+trait Unop {
+    fn eval(self, on: Value) -> Result<Value, Error>;
+}
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 struct Not(kw::not);
 
-impl Unop for Not {}
+impl Unop for Not {
+    fn eval(self, on: Value) -> Result<Value, Error> {
+        let on = on.expect_bool()?;
+        Ok((!on).into())
+    }
+}
 
 // <leaf> ::= <name> | <nmbr> | input ( <strg> ) | ( <expn> )
 // <name> ::= x | count | _special | y0 | camelWalk | snake_slither | ...
 // <nmbr> ::= 0 | 1 | 2 | 3 | ...
 // <strg> ::= "hello" | "" | "say \"yo!\n\tyo.\"" | ...
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens)]
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Leaf {
     Expn(#[parsel(recursive)] Paren<Box<Expn>>),
     Nmbr(LitInt),
