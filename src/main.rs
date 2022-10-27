@@ -1,12 +1,13 @@
 use std::fs;
 
-use ast::Prgm;
+// use ast::Prgm;
 use clap::Parser;
 
 mod ast;
 mod eval;
 
-use eval::{Ast, Context};
+use ast::Prgm;
+use eval::{Context, Eval};
 
 /// The slpy programming language.
 #[derive(Parser, Debug)]
@@ -24,11 +25,11 @@ struct Args {
 ///
 pub fn run(source: String) -> Result<(), &'static str> {
     let contents = fs::read_to_string(source).expect("Should have been able to read the file");
-    let prgm: Prgm = contents.parse().map_err(|e| {
+    let mut prgm: Prgm = contents.parse().map_err(|e| {
         dbg!(e);
         "parsing failed"
     })?;
-    prgm.eval(&mut Context::default())?;
+    dbg!(prgm).eval(&mut Context::default())?;
     Ok(())
 }
 

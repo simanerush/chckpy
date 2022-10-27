@@ -2,8 +2,8 @@ use crate::eval::{Error, Value};
 
 use parsel::{
     ast::{
-        Brace, Ident, LeftAssoc, LitBool, LitInt, LitStr, Many, Paren, Punctuated, RightAssoc,
-        Token,
+        Any, Brace, Ident, LeftAssoc, LitBool, LitInt, LitStr, Many, Paren, Punctuated, RightAssoc,
+        Separated, Token,
     },
     FromStr, Parse, ToTokens,
 };
@@ -24,7 +24,7 @@ mod kw {
 /// <prgm> ::= <blck>
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Prgm {
-    pub defns: Many<Defn>,
+    pub defns: Any<Defn>,
     pub main: Blck,
 }
 
@@ -33,7 +33,6 @@ pub struct Defn {
     def: kw::def,
     pub name: Ident,
     pub params: Paren<Punctuated<Ident, Token!(,)>>,
-    colon: Token!(:),
     pub rule: Nest,
 }
 
@@ -70,20 +69,16 @@ pub enum Stmt {
     If {
         if_: Token!(if),
         cond: Expn,
-        if_colon: Token!(:),
         #[parsel(recursive)]
         if_nest: Box<Nest>,
 
         else_: Token!(else),
-        else_colon: Token!(:),
         #[parsel(recursive)]
         else_nest: Box<Nest>,
     },
     While {
         while_: Token!(while),
         cond: Expn,
-        colon: Token!(:),
-
         #[parsel(recursive)]
         nest: Box<Nest>,
     },
@@ -97,8 +92,9 @@ pub enum Stmt {
         end: Token!(;),
     },
     FuncCall {
-        ident: Ident,
-        args: Paren<Punctuated<Ident, Token!(,)>>,
+        name: Ident,
+        args: Paren<Punctuated<Expn, Token!(,)>>,
+        end: Token!(;),
     },
 }
 
@@ -111,57 +107,50 @@ pub enum Updt {
 // <expn> ::= <addn>
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Expn {
-    UnOp(Not, #[parsel(recursive)] Box<Expn>),
+    UnOp(Not, #[parsel(recursive)] Box<Self>),
     BinOp(
         LeftAssoc<
-            Add,
-            LeftAssoc<Mult, RightAssoc<Expt, LeftAssoc<Comp, LeftAssoc<And, LeftAssoc<Or, Leaf>>>>>,
+            And,
+            LeftAssoc<Or, RightAssoc<Comp, LeftAssoc<Add, LeftAssoc<Mult, LeftAssoc<Expt, Leaf>>>>>,
         >,
     ),
-    Inpt(kw::input, #[parsel(recursive)] Paren<Box<Expn>>),
-    Int(kw::int, #[parsel(recursive)] Paren<Box<Expn>>),
-    Str(kw::str, #[parsel(recursive)] Paren<Box<Expn>>),
-    FuncCall {
-        name: Ident,
-        args: Paren<Punctuated<Ident, Token!(,)>>,
-    },
 }
 
 pub trait Binop {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error>;
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error>;
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-enum Add {
+pub enum Add {
     Plus(Token!(+)),
     Minus(Token!(-)),
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-enum Mult {
+pub enum Mult {
     Times(Token!(*)),
     Div(Token!(/)),
     Mod(Token!(%)),
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct Expt(Token!(^));
+pub struct Expt(Token!(^));
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-enum Comp {
+pub enum Comp {
     Lt(Token!(<)),
     Leq(Token!(<=)),
     Eq(Token!(==)),
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct And(kw::and);
+pub struct And(kw::and);
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct Or(kw::or);
+pub struct Or(kw::or);
 
 impl Binop for Add {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_int()?;
         let right = rhs.expect_int()?;
         Ok(match self {
@@ -173,7 +162,7 @@ impl Binop for Add {
 }
 
 impl Binop for Mult {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_int()?;
         let right = rhs.expect_int()?;
         Ok(match self {
@@ -184,7 +173,7 @@ impl Binop for Mult {
                 }
                 left / right
             }
-            Self::Div(_) => {
+            Self::Mod(_) => {
                 if right == 0 {
                     return Err("cannot mod by zero");
                 }
@@ -196,7 +185,7 @@ impl Binop for Mult {
 }
 
 impl Binop for Expt {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_int()?;
         let right = rhs.expect_int()?;
         if let Ok(exp) = right.try_into() {
@@ -208,20 +197,20 @@ impl Binop for Expt {
 }
 
 impl Binop for Comp {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_int()?;
         let right = rhs.expect_int()?;
         Ok(match self {
-            Comp::Lt(_) => left < right,
-            Comp::Leq(_) => left <= right,
-            Comp::Eq(_) => left == right,
+            Self::Lt(_) => left < right,
+            Self::Leq(_) => left <= right,
+            Self::Eq(_) => left == right,
         }
         .into())
     }
 }
 
 impl Binop for And {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_bool()?;
         let right = rhs.expect_bool()?;
         Ok((left && right).into())
@@ -229,29 +218,22 @@ impl Binop for And {
 }
 
 impl Binop for Or {
-    fn eval(self, lhs: Value, rhs: Value) -> Result<Value, Error> {
+    fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error> {
         let left = lhs.expect_bool()?;
         let right = rhs.expect_bool()?;
         Ok((left || right).into())
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct UnExp<U: Unop> {
-    op: U,
-    #[parsel(recursive)]
-    expn: Box<Expn>,
-}
-
-trait Unop {
-    fn eval(self, on: Value) -> Result<Value, Error>;
+pub trait Unop {
+    fn eval(&self, on: Value) -> Result<Value, Error>;
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-struct Not(kw::not);
+pub struct Not(kw::not);
 
 impl Unop for Not {
-    fn eval(self, on: Value) -> Result<Value, Error> {
+    fn eval(&self, on: Value) -> Result<Value, Error> {
         let on = on.expect_bool()?;
         Ok((!on).into())
     }
@@ -263,10 +245,19 @@ impl Unop for Not {
 // <strg> ::= "hello" | "" | "say \"yo!\n\tyo.\"" | ...
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Leaf {
-    Expn(#[parsel(recursive)] Paren<Box<Expn>>),
+    Inpt(kw::input, #[parsel(recursive)] Paren<Box<Expn>>),
+    Int(kw::int, #[parsel(recursive)] Paren<Box<Expn>>),
+    Str(kw::str, #[parsel(recursive)] Paren<Box<Expn>>),
+    FuncCall {
+        name: Ident,
+
+        #[parsel(recursive)]
+        args: Paren<Punctuated<Box<Expn>, Token!(,)>>,
+    },
     Nmbr(LitInt),
     Strg(LitStr),
     Bool(LitBool),
     Name(Ident),
     Unit(kw::None),
+    Expn(#[parsel(recursive)] Paren<Box<Expn>>),
 }

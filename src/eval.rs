@@ -1,29 +1,37 @@
 use std::{collections::HashMap, io::Write};
 
-use parsel::{ast::LeftAssoc, syn::Ident, Spanned};
+use parsel::{
+    ast::{LeftAssoc, RightAssoc},
+    syn::Ident,
+    Spanned,
+};
 
 use crate::ast::*;
 
 pub type Error = &'static str;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 #[must_use]
 pub enum Value {
     Unit,
     Int(i128),
     Str(String),
     Bool(bool),
-    Fn { params: Vec<Ident>, rule: Nest },
+    Func {
+        captures: Context,
+        params: Vec<Ident>,
+        rule: Nest,
+    },
 }
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Value::Unit => write!(f, "None"),
-            Value::Int(n) => write!(f, "{n}"),
-            Value::Str(s) => write!(f, "{s}"),
-            Value::Bool(b) => write!(f, "{b}"),
-            Value::Fn { rule, .. } => write!(f, "function object"),
+            Self::Unit => write!(f, "None"),
+            Self::Int(n) => write!(f, "{n}"),
+            Self::Str(s) => write!(f, "{s}"),
+            Self::Bool(b) => write!(f, "{b}"),
+            Self::Func { .. } => write!(f, "function object"),
         }
     }
 }
@@ -53,32 +61,59 @@ impl From<()> for Value {
 }
 
 impl Value {
-    pub fn expect_int(self) -> Result<i128, Error> {
-        if let Self::Int(n) = self {
+    pub const fn expect_int(&self) -> Result<i128, Error> {
+        if let &Self::Int(n) = self {
             Ok(n)
         } else {
             Err("type error: expected int")
         }
     }
 
-    pub fn expect_bool(self) -> Result<bool, Error> {
-        if let Self::Bool(b) = self {
+    pub const fn expect_bool(&self) -> Result<bool, Error> {
+        if let &Self::Bool(b) = self {
             Ok(b)
         } else {
             Err("type error: expected bool")
         }
     }
+
+    pub fn expect_func(&self) -> Result<(Context, Vec<Ident>, Nest), Error> {
+        if let Self::Func {
+            captures,
+            params,
+            rule,
+        } = self
+        {
+            Ok((captures.clone(), params.clone(), rule.clone()))
+        } else {
+            Err("type error: expected function")
+        }
+    }
+
+    pub fn try_call_with(&self, args: Vec<Self>) -> Result<Option<Self>, Error> {
+        let (mut call_ctx, params, mut rule) = self.expect_func()?;
+        if args.len() != params.len() {
+            return Err("unexpected number of arguments");
+        }
+        for (param, arg) in params.into_iter().zip(args) {
+            call_ctx.set(param, arg);
+        }
+
+        // semantically, if a function does not return a value in an expn context, we
+        // assume it returned None
+        rule.eval(&mut call_ctx)
+    }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Context(HashMap<Ident, Value>);
 
 impl Context {
-    fn get(&self, name: &Ident) -> Option<Value> {
-        self.0.get(name).cloned()
+    fn get(&mut self, name: &Ident) -> Option<&mut Value> {
+        self.0.get_mut(name)
     }
 
-    fn get_or(&self, name: &Ident) -> Result<Value, Error> {
+    fn get_or(&mut self, name: &Ident) -> Result<&mut Value, Error> {
         self.get(name).ok_or("undefined variable")
     }
 
@@ -90,28 +125,32 @@ impl Context {
 pub trait Eval: Sized + Spanned {
     type Output;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error>;
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error>;
 }
 
 impl Eval for Prgm {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        for def in self.defns {
-            def.eval(ctx)?
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        for def in &mut self.defns {
+            def.eval(ctx)?;
         }
-        self.main.eval(ctx)
+        self.main.eval(ctx).map(|_| ())
     }
 }
 
 impl Eval for Defn {
     type Output = ();
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        let name = self.name;
-        let params = self.params.into_iter().collect();
-        let rule = self.rule;
-        let func = Value::Fn { params, rule };
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        let name = self.name.clone();
+        let params = self.params.iter().cloned().collect();
+        let rule = self.rule.clone();
+        let func = Value::Func {
+            captures: ctx.clone(),
+            params,
+            rule,
+        };
 
         ctx.set(name, func);
         Ok(())
@@ -119,22 +158,25 @@ impl Eval for Defn {
 }
 
 impl Eval for Nest {
-    type Output = ();
+    type Output = Option<Value>;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
         self.block.eval(ctx)
     }
 }
 
 impl Eval for Blck {
-    type Output = ();
+    type Output = Option<Value>;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        for stmt in self.stmts {
-            stmt.eval(ctx)?;
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        for stmt in &mut self.stmts {
+            let v = stmt.eval(ctx)?;
+            if v.is_some() {
+                return Ok(v);
+            }
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -142,28 +184,31 @@ impl Eval for Stmt {
     /// If None, this is a return; otherwse, it's not a return.
     type Output = Option<Value>;
 
-    #[must_use]
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
             Self::Assgn { ident, expn, .. } => {
                 let value = expn.eval(ctx)?;
-                ctx.set(ident, value);
+                ctx.set(ident.clone(), value);
+                Ok(None)
             }
             Self::Updt {
                 ident, op, expn, ..
             } => {
-                let old = ctx.get_or(&ident)?;
                 let rhs = expn.eval(ctx)?;
-                match op {
-                    Updt::Plus(_) => ctx.set(ident, old.expect_int()? + rhs.expect_int()?),
-                    Updt::Minus(_) => ctx.set(ident, old.expect_int()? - rhs.expect_int()?),
+                let old = ctx.get_or(ident)?;
+                let new = match op {
+                    Updt::Plus(_) => old.expect_int()? + rhs.expect_int()?,
+                    Updt::Minus(_) => old.expect_int()? - rhs.expect_int()?,
                 };
+                ctx.set(ident.clone(), new);
+                Ok(None)
             }
-            Self::Pass(_, _) => {}
+            Self::Pass(_, _) => Ok(None),
             Self::Print(_, args, _) => {
-                for expn in args.into_iter() {
+                for expn in args.iter_mut() {
                     println!("{}", expn.eval(ctx)?);
                 }
+                Ok(None)
             }
             Self::If {
                 cond,
@@ -172,72 +217,45 @@ impl Eval for Stmt {
                 ..
             } => {
                 if cond.eval(ctx)?.expect_bool()? {
-                    if_nest.eval(ctx);
+                    if_nest.eval(ctx)
                 } else {
-                    else_nest.eval(ctx);
+                    else_nest.eval(ctx)
                 }
             }
             Self::While { cond, nest, .. } => {
                 while cond.eval(ctx)?.expect_bool()? {
-                    nest.eval(ctx);
+                    let v = nest.eval(ctx)?;
+                    if v.is_some() {
+                        return Ok(v);
+                    }
                 }
+                Ok(None)
             }
-            Self::ReturnExpn { expn, .. } => return Ok(Some(expn.eval(ctx)?)),
-            Self::Return { .. } => return Ok(Some(Value::Unit)),
-            Self::FuncCall { ident, args } => todo!(),
+            Self::ReturnExpn { expn, .. } => Ok(Some(expn.eval(ctx)?)),
+            Self::Return { .. } => Ok(Some(Value::Unit)),
+            Self::FuncCall { name, args, .. } => {
+                let func = ctx.get_or(name)?.clone();
+                let args: Vec<_> = args
+                    .iter_mut()
+                    .map(|e| e.eval(ctx))
+                    .collect::<Result<_, _>>()?;
+
+                // in a statmenet context we always throw away the return value; if a function
+                // returns we definitely don't want to bubble up that return
+                func.try_call_with(args)?;
+                Ok(None)
+            }
         }
-        Ok(None)
     }
 }
 
 impl Eval for Expn {
     type Output = Value;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
-            Expn::UnOp(u, expr) => {
-                u.eval(expr.eval(ctx))
-            },
-            Expn::BinOp(expr) => { 
-                expr.eval(ctx)
-            },
-            Expn::Inpt(_, expr) => {
-                let res = expr.into_inner().eval(ctx)?;
-                print!("{res}");
-                std::io::stdout().flush().expect("can flush stdout");
-                let mut buffer = String::new();
-                if std::io::stdin().read_line(&mut buffer).is_ok() {
-                    buffer.trim_end().into()
-                } else {
-                    Err("could not read stdin")
-                }
-            },
-            Expn::Int(_, expr) => {
-                let res = expr.into_inner().eval(ctx)?;
-                Ok(match res {
-                    Value::Int(n)  => {
-                        n
-                    },
-                    Value::Str(s) => {
-                        if let Ok(n) = s.parse() {
-                            n
-                        } else {
-                            return Err("couldn't convert to int")
-                        }
-                    },
-                    Value::Bool(b) => {
-                        if b { 1 }
-                        else { 0 }
-                    }
-                    _ => {
-                        return Err("couldn't convert to int")
-                    }
-                }.into())
-            },
-            Expn::Str(_, expr) => {
-                Ok(expr.into_inner().eval(ctx)?.to_string().into());
-            },
-            Expn::FuncCall { name, args } => todo!(),
+            Self::UnOp(u, expn) => u.eval(expn.eval(ctx)?),
+            Self::BinOp(expn) => expn.eval(ctx),
         }
     }
 }
@@ -248,12 +266,33 @@ where
 {
     type Output = Value;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
-            LeftAssoc::Binary { lhs, op, rhs } => {
-                let lhs = lhs.eval(ctx);
+            Self::Binary { lhs, op, rhs } => {
+                let lhs = lhs.eval(ctx)?;
+                let rhs = rhs.eval(ctx)?;
+                op.eval(lhs, rhs)
             }
-            LeftAssoc::Rhs(_) => todo!(),
+            Self::Rhs(expn) => expn.eval(ctx),
+        }
+    }
+}
+
+impl<B: Binop, C: Eval<Output = Value>> Eval for RightAssoc<B, C>
+where
+    Self: Spanned,
+{
+    type Output = Value;
+
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        match self {
+            Self::Binary { lhs, op, rhs } => {
+                // evaluate the rhs first to allow short-circuiting
+                let rhs = rhs.eval(ctx)?;
+                let lhs = lhs.eval(ctx)?;
+                op.eval(lhs, rhs)
+            }
+            Self::Lhs(expn) => expn.eval(ctx),
         }
     }
 }
@@ -261,21 +300,59 @@ where
 impl Eval for Leaf {
     type Output = Value;
 
-    fn eval(self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        match self {
-            Self::Name(name) => ctx.get(&name).ok_or("undefined name"),
-            Self::Nmbr(nmbr) => Ok(nmbr.into_inner() as Value),
-            Self::Expn(expn) => expn.into_inner().eval(ctx),
-            Self::Inpt(_, s) => {
-                print!("{}", s.into_inner().value());
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        Ok(match self {
+            Self::Expn(e) => e.eval(ctx)?,
+            Self::Nmbr(n) => n.into_inner().into(),
+            Self::Strg(s) => s.as_ref().to_string().into(),
+            Self::Bool(b) => b.into_inner().into(),
+            Self::Name(n) => ctx.get_or(n)?.clone(),
+            Self::Unit(_) => ().into(),
+            Self::Inpt(_, expn) => {
+                let res = expn.eval(ctx)?;
+                print!("{res}");
                 std::io::stdout().flush().expect("can flush stdout");
                 let mut buffer = String::new();
                 if std::io::stdin().read_line(&mut buffer).is_ok() {
-                    buffer.trim_end().parse().map_err(|_| "malformed input")
+                    buffer.trim_end().to_string().into()
                 } else {
-                    Err("expcted value")
+                    return Err("could not read stdin");
                 }
             }
-        }
+            Self::Int(_, expn) => {
+                let res = expn.eval(ctx)?;
+                match res {
+                    Value::Int(n) => n,
+                    Value::Str(s) => {
+                        if let Ok(n) = s.parse() {
+                            n
+                        } else {
+                            return Err("couldn't convert to int");
+                        }
+                    }
+                    Value::Bool(b) => {
+                        if b {
+                            1
+                        } else {
+                            0
+                        }
+                    }
+                    _ => return Err("couldn't convert to int"),
+                }
+                .into()
+            }
+            Self::Str(_, expn) => expn.eval(ctx)?.to_string().into(),
+            Self::FuncCall { name, args } => {
+                let func = ctx.get_or(name)?.clone();
+                let args: Vec<_> = args
+                    .iter_mut()
+                    .map(|e| e.eval(ctx))
+                    .collect::<Result<_, _>>()?;
+
+                // semantically, if a function does not return a value in an expn context, we
+                // assume it returned None
+                func.try_call_with(args)?.unwrap_or(Value::Unit)
+            }
+        })
     }
 }
