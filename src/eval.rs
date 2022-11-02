@@ -132,28 +132,7 @@ impl Eval for Prgm {
     type Output = ();
 
     fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        for def in &mut self.defns {
-            def.eval(ctx)?;
-        }
         self.main.eval(ctx).map(|_| ())
-    }
-}
-
-impl Eval for Defn {
-    type Output = ();
-
-    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        let name = self.name.clone();
-        let params = self.params.iter().cloned().collect();
-        let rule = self.rule.clone();
-        let func = Value::Func {
-            captures: ctx.clone(),
-            params,
-            rule,
-        };
-
-        ctx.set(name, func);
-        Ok(())
     }
 }
 
@@ -233,16 +212,27 @@ impl Eval for Stmt {
             }
             Self::ReturnExpn { expn, .. } => Ok(Some(expn.eval(ctx)?)),
             Self::Return { .. } => Ok(Some(Value::Unit)),
-            Self::FuncCall { name, args, .. } => {
-                let func = ctx.get_or(name)?.clone();
-                let args: Vec<_> = args
-                    .iter_mut()
-                    .map(|e| e.eval(ctx))
-                    .collect::<Result<_, _>>()?;
+            Self::Defn {
+                name, params, rule, ..
+            } => {
+                let name = name.clone();
+                let params = params.iter().cloned().collect();
+                let rule = rule.as_ref().clone();
+                let func = Value::Func {
+                    captures: ctx.clone(),
+                    params,
+                    rule,
+                };
 
+                ctx.set(name, func);
+
+                Ok(None)
+            }
+            Self::FuncCall(appl, _) => {
                 // in a statmenet context we always throw away the return value; if a function
                 // returns we definitely don't want to bubble up that return
-                func.try_call_with(args)?;
+                drop(appl.eval(ctx)?);
+
                 Ok(None)
             }
         }
@@ -253,10 +243,7 @@ impl Eval for Expn {
     type Output = Value;
 
     fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        match self {
-            Self::UnOp(u, expn) => u.eval(expn.eval(ctx)?),
-            Self::BinOp(expn) => expn.eval(ctx),
-        }
+        self.0.eval(ctx)
     }
 }
 
@@ -287,13 +274,45 @@ where
     fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
         match self {
             Self::Binary { lhs, op, rhs } => {
-                // evaluate the rhs first to allow short-circuiting
+                // evaluate the rhs first
                 let rhs = rhs.eval(ctx)?;
                 let lhs = lhs.eval(ctx)?;
                 op.eval(lhs, rhs)
             }
             Self::Lhs(expn) => expn.eval(ctx),
         }
+    }
+}
+
+impl<U: Unop, C: Eval<Output = Value> + parsel::ToTokens> Eval for UnExp<U, C>
+where
+    Self: Spanned,
+{
+    type Output = Value;
+
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        match self {
+            Self::Op(op, child) => op.eval(child.eval(ctx)?),
+            Self::Child(expn) => expn.eval(ctx),
+        }
+    }
+}
+
+impl Eval for Appl {
+    type Output = Value;
+
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        let mut left = self.left.eval(ctx)?;
+
+        for args in &mut self.right {
+            let call_args = args
+                .iter_mut()
+                .map(|e| e.eval(ctx))
+                .collect::<Result<_, _>>()?;
+            left = left.try_call_with(call_args)?.unwrap_or(Value::Unit);
+        }
+
+        Ok(left)
     }
 }
 
@@ -342,17 +361,6 @@ impl Eval for Leaf {
                 .into()
             }
             Self::Str(_, expn) => expn.eval(ctx)?.to_string().into(),
-            Self::FuncCall { name, args } => {
-                let func = ctx.get_or(name)?.clone();
-                let args: Vec<_> = args
-                    .iter_mut()
-                    .map(|e| e.eval(ctx))
-                    .collect::<Result<_, _>>()?;
-
-                // semantically, if a function does not return a value in an expn context, we
-                // assume it returned None
-                func.try_call_with(args)?.unwrap_or(Value::Unit)
-            }
         })
     }
 }

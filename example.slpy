@@ -1,4 +1,7 @@
-def foo(x, y) {
-	print(x, y);
+def foo(x) {
+	def bar(y) {
+		print(x + y);
+	}
+	return bar;
 }
-foo(1 + 2 * 3, input("hi"));
+foo(2)(3);

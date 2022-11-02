@@ -29,7 +29,7 @@ pub fn run(source: String) -> Result<(), &'static str> {
         dbg!(e);
         "parsing failed"
     })?;
-    dbg!(prgm).eval(&mut Context::default())?;
+    prgm.eval(&mut Context::default())?;
     Ok(())
 }
 
