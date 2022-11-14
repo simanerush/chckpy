@@ -1,7 +1,0 @@
-def foo(x) {
-	def bar(y) {
-		print(x + y);
-	}
-	return bar;
-}
-foo(2)(3);
