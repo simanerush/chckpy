@@ -2,7 +2,7 @@ use crate::eval::{Error, Value};
 
 use parsel::{
     ast::{
-        Any, Brace, Empty, Ident, LeftAssoc, LitBool, LitInt, LitStr, Many, Paren, Punctuated,
+        Any, Brace, Ident, LeftAssoc, LitBool, LitInt, LitStr, Many, Maybe, Paren, Punctuated,
         RightAssoc, Token,
     },
     FromStr, Parse, ToTokens,
@@ -19,6 +19,7 @@ mod kw {
     parsel::custom_keyword!(and);
     parsel::custom_keyword!(or);
     parsel::custom_keyword!(None);
+    parsel::custom_keyword!(bool);
 }
 
 /// <prgm> ::= <blck>
@@ -43,6 +44,12 @@ pub struct Blck {
 //          | print ( <expn> )
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Stmt {
+    Decl {
+        typedIdent: Ident,
+        equals: Token!(=),
+        expn: Expn,
+        end: Token!(;),
+    },
     Assgn {
         ident: Ident,
         equals: Token!(=),
@@ -85,7 +92,8 @@ pub enum Stmt {
     Defn {
         def: kw::def,
         name: Ident,
-        params: Paren<Punctuated<Ident, Token!(,)>>,
+        params: Paren<Punctuated<TypedIdent, Token!(,)>>,
+        ret: Maybe<ReturnType>,
         #[parsel(recursive)]
         rule: Box<Nest>,
     },
@@ -261,4 +269,25 @@ pub enum Leaf {
     Name(Ident),
     Unit(kw::None),
     Expn(#[parsel(recursive)] Paren<Box<Expn>>),
+}
+
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
+pub struct ReturnType {
+    arrow: Token!(->),
+    ty: Type,
+}
+
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
+pub struct TypedIdent {
+    ident: Ident,
+    colon: Token!(:),
+    ty: Type,
+}
+
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
+pub enum Type {
+    Int(kw::int),
+    Bool(kw::bool),
+    Str(kw::str),
+    Unit(kw::None),
 }
