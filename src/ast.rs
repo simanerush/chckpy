@@ -25,7 +25,17 @@ mod kw {
 /// <prgm> ::= <blck>
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct Prgm {
+    pub defns: Any<Defn>,
     pub main: Blck,
+}
+
+#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
+pub struct Defn {
+    pub def: kw::def,
+    pub name: Ident,
+    pub params: Paren<Punctuated<TypedIdent, Token!(,)>>,
+    pub ret: Maybe<ReturnType>,
+    pub rule: Nest,
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
@@ -89,15 +99,11 @@ pub enum Stmt {
         return_: Token!(return),
         end: Token!(;),
     },
-    Defn {
-        def: kw::def,
+    FuncCall {
         name: Ident,
-        params: Paren<Punctuated<TypedIdent, Token!(,)>>,
-        ret: Maybe<ReturnType>,
-        #[parsel(recursive)]
-        rule: Box<Nest>,
+        args: Paren<Punctuated<Expn, Token!(,)>>,
+        end: Token!(;),
     },
-    FuncCall(Appl, Token!(;)),
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
@@ -113,7 +119,7 @@ pub struct Expn(
         And,
         LeftAssoc<
             Or,
-            RightAssoc<Comp, LeftAssoc<Add, LeftAssoc<Mult, LeftAssoc<Expt, UnExp<Not, Appl>>>>>,
+            RightAssoc<Comp, LeftAssoc<Add, LeftAssoc<Mult, LeftAssoc<Expt, UnExp<Not, Leaf>>>>>,
         >,
     >,
 );
@@ -247,13 +253,6 @@ impl Unop for Not {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
-pub struct Appl {
-    pub left: Leaf,
-    #[parsel(recursive)]
-    pub right: Any<Paren<Punctuated<Box<Expn>, Token!(,)>>>,
-}
-
 // <leaf> ::= <name> | <nmbr> | input ( <strg> ) | ( <expn> )
 // <name> ::= x | count | _special | y0 | camelWalk | snake_slither | ...
 // <nmbr> ::= 0 | 1 | 2 | 3 | ...
@@ -263,6 +262,11 @@ pub enum Leaf {
     Inpt(kw::input, #[parsel(recursive)] Paren<Box<Expn>>),
     Int(kw::int, #[parsel(recursive)] Paren<Box<Expn>>),
     Str(kw::str, #[parsel(recursive)] Paren<Box<Expn>>),
+    FuncCall {
+        name: Ident,
+        #[parsel(recursive)]
+        args: Paren<Punctuated<Box<Expn>, Token!(,)>>,
+    },
     Nmbr(LitInt),
     Strg(LitStr),
     Bool(LitBool),
@@ -279,7 +283,7 @@ pub struct ReturnType {
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub struct TypedIdent {
-    ident: Ident,
+    pub ident: Ident,
     colon: Token!(:),
     ty: Type,
 }

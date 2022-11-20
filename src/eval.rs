@@ -132,7 +132,28 @@ impl Eval for Prgm {
     type Output = ();
 
     fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        for def in &mut self.defns {
+            def.eval(ctx)?;
+        }
         self.main.eval(ctx).map(|_| ())
+    }
+}
+
+impl Eval for Defn {
+    type Output = ();
+
+    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
+        let name = self.name.clone();
+        let params = self.params.iter().cloned().map(|i| i.ident).collect();
+        let rule = self.rule.clone();
+        let func = Value::Func {
+            captures: ctx.clone(),
+            params,
+            rule,
+        };
+
+        ctx.set(name, func);
+        Ok(())
     }
 }
 
@@ -212,26 +233,14 @@ impl Eval for Stmt {
             }
             Self::ReturnExpn { expn, .. } => Ok(Some(expn.eval(ctx)?)),
             Self::Return { .. } => Ok(Some(Value::Unit)),
-            Self::Defn {
-                name, params, rule, ..
-            } => {
-                let name = name.clone();
-                let params = params.iter().cloned().collect();
-                let rule = rule.as_ref().clone();
-                let func = Value::Func {
-                    captures: ctx.clone(),
-                    params,
-                    rule,
-                };
+            Self::FuncCall { name, args, .. } => {
+                let func = ctx.get_or(name)?.clone();
+                let args: Vec<_> = args
+                    .iter_mut()
+                    .map(|e| e.eval(ctx))
+                    .collect::<Result<_, _>>()?;
 
-                ctx.set(name, func);
-
-                Ok(None)
-            }
-            Self::FuncCall(appl, _) => {
-                // in a statmenet context we always throw away the return value; if a function
-                // returns we definitely don't want to bubble up that return
-                drop(appl.eval(ctx)?);
+                func.try_call_with(args)?;
 
                 Ok(None)
             }
@@ -298,24 +307,6 @@ where
     }
 }
 
-impl Eval for Appl {
-    type Output = Value;
-
-    fn eval(&mut self, ctx: &mut Context) -> Result<Self::Output, Error> {
-        let mut left = self.left.eval(ctx)?;
-
-        for args in &mut self.right {
-            let call_args = args
-                .iter_mut()
-                .map(|e| e.eval(ctx))
-                .collect::<Result<_, _>>()?;
-            left = left.try_call_with(call_args)?.unwrap_or(Value::Unit);
-        }
-
-        Ok(left)
-    }
-}
-
 impl Eval for Leaf {
     type Output = Value;
 
@@ -324,6 +315,15 @@ impl Eval for Leaf {
             Self::Expn(e) => e.eval(ctx)?,
             Self::Nmbr(n) => n.into_inner().into(),
             Self::Strg(s) => s.as_ref().to_string().into(),
+            Self::FuncCall { name, args } => {
+                let func = ctx.get_or(name)?.clone();
+                let args: Vec<_> = args
+                    .iter_mut()
+                    .map(|e| e.eval(ctx))
+                    .collect::<Result<_, _>>()?;
+
+                func.try_call_with(args)?.ok_or("expected a value")?
+            }
             Self::Bool(b) => b.into_inner().into(),
             Self::Name(n) => ctx.get_or(n)?.clone(),
             Self::Unit(_) => ().into(),
