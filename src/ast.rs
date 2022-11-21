@@ -1,3 +1,4 @@
+use crate::check::Ty;
 use crate::eval::{Error, Value};
 
 use parsel::{
@@ -55,7 +56,7 @@ pub struct Blck {
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]
 pub enum Stmt {
     Decl {
-        typedIdent: Ident,
+        typed_ident: TypedIdent,
         equals: Token!(=),
         expn: Expn,
         end: Token!(;),
@@ -125,6 +126,7 @@ pub struct Expn(
 );
 
 pub trait Binop {
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error>;
     fn eval(&self, lhs: Value, rhs: Value) -> Result<Value, Error>;
 }
 
@@ -167,6 +169,12 @@ impl Binop for Add {
         }
         .into())
     }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_int()?;
+        rhs.expect_int()?;
+        Ok(Ty::Int)
+    }
 }
 
 impl Binop for Mult {
@@ -190,6 +198,12 @@ impl Binop for Mult {
         }
         .into())
     }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_int()?;
+        rhs.expect_int()?;
+        Ok(Ty::Int)
+    }
 }
 
 impl Binop for Expt {
@@ -201,6 +215,12 @@ impl Binop for Expt {
         } else {
             Err("negative powers are not supported since there are no floats in dwislpy")
         }
+    }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_int()?;
+        rhs.expect_int()?;
+        Ok(Ty::Int)
     }
 }
 
@@ -215,6 +235,12 @@ impl Binop for Comp {
         }
         .into())
     }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_int()?;
+        rhs.expect_int()?;
+        Ok(Ty::Bool)
+    }
 }
 
 impl Binop for And {
@@ -223,6 +249,12 @@ impl Binop for And {
         let right = rhs.expect_bool()?;
         Ok((left && right).into())
     }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_bool()?;
+        rhs.expect_bool()?;
+        Ok(Ty::Bool)
+    }
 }
 
 impl Binop for Or {
@@ -230,6 +262,12 @@ impl Binop for Or {
         let left = lhs.expect_bool()?;
         let right = rhs.expect_bool()?;
         Ok((left || right).into())
+    }
+
+    fn check(&self, lhs: Ty, rhs: Ty) -> Result<Ty, Error> {
+        lhs.expect_bool()?;
+        rhs.expect_bool()?;
+        Ok(Ty::Bool)
     }
 }
 
@@ -240,6 +278,7 @@ pub enum UnExp<U: Unop, C: ToTokens> {
 }
 
 pub trait Unop {
+    fn check(&self, on: Ty) -> Result<Ty, Error>;
     fn eval(&self, on: Value) -> Result<Value, Error>;
 }
 
@@ -250,6 +289,11 @@ impl Unop for Not {
     fn eval(&self, on: Value) -> Result<Value, Error> {
         let on = on.expect_bool()?;
         Ok((!on).into())
+    }
+
+    fn check(&self, on: Ty) -> Result<Ty, Error> {
+        on.expect_bool()?;
+        Ok(Ty::Bool)
     }
 }
 
@@ -285,7 +329,7 @@ pub struct ReturnType {
 pub struct TypedIdent {
     pub ident: Ident,
     colon: Token!(:),
-    ty: Type,
+    pub ty: Type,
 }
 
 #[derive(PartialEq, Eq, Debug, Parse, ToTokens, FromStr, Clone)]

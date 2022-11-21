@@ -4,6 +4,7 @@ use std::fs;
 use clap::Parser;
 
 mod ast;
+mod check;
 mod eval;
 
 use ast::Prgm;
