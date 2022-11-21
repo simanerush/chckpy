@@ -121,8 +121,28 @@ impl Check for Defn {
     type Info = ArrowType;
 
     fn check(&mut self, defs: &mut DefTypes, syms: &mut SymTab) -> Result<Self::Info, Error> {
-        self.block.check(defs, syms)
-    }
+        let returns = (self.rule.check(defs, syms)?, self.ret);
+        // convert ft to unit
+        let actual = match returns.0 {
+            Rtns::Fallthrough => Ty::Unit,
+            Rtns::MightReturn(_) => { return Err("fuction blocks must return a definite value"); }
+            Rtns::Returns(ty) => ty, 
+        };
+        
+        let expected = match *self.ret {
+            None => ty,
+            Some(ret) => ret.ty.into,
+        };
+        
+        if actual != expected {
+            for param in self.params {
+                // fucking hell
+            }
+
+            return Error
+        } else {
+
+        }
 }
 
 impl Check for Nest {
