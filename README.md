@@ -1,4 +1,4 @@
-# CS394 HW 3
+# CS394 HW 4
 
 ## Sima Nerush and Riley Shahar
 
@@ -8,11 +8,13 @@ This is a fully-functioning python-like language written in Rust using the
 closely mimics the provided grammar for DWISPY, except that (as we discussed) it
 uses curly braces instead of indent/dedent tokens, and it uses semicolons
 instead of newlines.  These changes are necessary to make this work with the
-library. Further, we expanded the grammar to allow higher-order functions and
-function objects.
+library. 
 
 Once parsed, the language is evaluated straightforwardly; that code is in
-`src/eval.rs`.
+`src/eval.rs`. The type-checker is in `src/check.rs`.
+
+Type-checker in `src/check.rs` outlines the type-chekcing rules as specified on [jimfix website](https://jimfix.github.io/csci394/chckpy.html).
+We have implemented a trait `Check` that every block implements such that we are now able to type-check a strongly-typed DWISPY program and emit type errors on that stage. This works in a similar way as before, but with this additional `Check` step added during the front-end step.  
 
 Some features of the language:
 
@@ -22,9 +24,6 @@ Some features of the language:
 - While loops
 - IO (print and input)
 - Functions and function calls
-- Complete, working support for arbitrarily-nested higher-order functions as
-    well as function objects (`f(1)(2)` and `g = f(1); g(2)` will both work),
-    with context capturing and shadowing
 
 The structure is pretty simple. Parsel autogenerates a parser from the
 programmatic description of the AST; the parser outputs the AST as that
